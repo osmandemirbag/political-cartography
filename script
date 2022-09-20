@@ -1,0 +1,1436 @@
+### POLITICAL CARTOGRAPHY: A QUANTITATIVE TEXT ANALYSIS APPROACH ###
+
+## Word embeddings ##
+# I uploaded fastText's Turkish embeddings into r from the link that I obtained from personal communication with Dustin Stoltz.
+# Here is the dropbox link:  https://www.dropbox.com/s/4552rylf6v2kcy3/ft.cc.tr.300D.2M.Rds?dl=0
+
+##################--------------------------------------------------------
+## Load Packages ## 
+pacman::p_load(rvest,tidyverse,text2map, stringr, 
+               textclean, text2vec,lyric2vec, 
+               fasttextM, ggplot2, knitr, 
+               tidyverse, genius, geniusr,
+               scales, tidytext, chorrrds,
+               lubridate, ggrepel,slider, 
+               magrittr, tm, Matrix,
+               testit, plyr, SnowballC,
+               stm, quanteda, textstem, stringi,
+               qdapDictionaries, udpipe,
+               quanteda.textmodels, compareDF, 
+               rtf, slam, corpustools,textnets,
+               quanteda.textplots , quanteda.textstats,
+               igraph , data.table, ggraph,
+               tidygraph,FactoMineR,factoextra,
+               ggpubr,gridExtra,tidyquant,
+               corclass, reshape2,
+               qgraph, RCA,spdep,readxl)
+
+##library(remotes)
+##install_gitlab("culturalcartography/text2map")
+##------------------------------------------------------------------------
+# Load Data
+
+tbmm_corpus <- readRDS("/Users/osmandemirbag/Desktop/TBMM/TBMMCorpus.Rds")
+my.wv <- readRDS("/Users/osmandemirbag/Desktop/TBMM/ft.cc.tr.300D.2M.Rds")
+
+##########################################################################
+## Cleaning
+##########################################################################
+# remove NAs
+tbmm_corpus$Speeches <- gsub("NA", "", tbmm_corpus$Speeches) %>%
+  gsub("\\s+"," ", .) %>% 
+  trimws(., "left")
+
+# punctuation, tolower
+tbmm_corpus$Speeches <- gsub('[[:punct:] ]+',' ', tbmm_corpus$Speeches) %>% tolower()
+
+##########################################################################
+# CMD Analysis
+##########################################################################
+# Create DTM based on corpus
+it <- itoken(tbmm_corpus$Speeches, tokenizer = word_tokenizer)
+v <- create_vocabulary(it)
+vectorizer <- vocab_vectorizer(v)
+my.dtm <- create_dtm(it, vectorizer)
+
+# Closeness of documents to the concept of "demokrasi"
+doc.closeness <- CMDist(dtm = my.dtm, 
+                                cw = "demokrasi", 
+                                wv = my.wv, scale = T)
+colnames(doc.closeness)[1] <- c("ID")
+CMDdemokrasi          <- cbind(doc.closeness, tbmm_corpus, by = "ID")
+colnames(CMDdemokrasi)[2] <- "cmd"
+CMDdemokrasi$cmd <- as.double(CMDdemokrasi$cmd)
+CMDdemokrasi          <- CMDdemokrasi[order(CMDdemokrasi$cmd, decreasing = TRUE),]
+CMDdemokrasi$by       <- NULL
+
+#saveRDS(CMDdemokrasi, "/Users/osmandemirbag/Desktop/TBMM/CMDdemokrasi.Rds")
+##########################################################################
+# Loading Short Data
+##########################################################################
+
+CMDdemokrasi <- readRDS("/Users/osmandemirbag/Desktop/TBMM/CMDdemokrasi.Rds")
+
+##########################################################################
+# 70 words from smaller dataset (CMD with ideal "demokrasi" scores)
+##########################################################################
+
+# Prepare data for socio-semantic network analysis (lemmatization,stopwords,cooc)
+CMD_short <- CMDdemokrasi[CMDdemokrasi$cmd > 1, ]
+CMD_short <- CMD_short[!duplicated(CMD_short[,-2]),]
+df_short = subset(CMD_short, select = -c(1)) #drop first IDs
+
+udmodel <- udpipe_download_model(language = "turkish")
+udmodel <- udpipe_load_model(file = udmodel$file_model)
+
+everyword_lemmatized <- udpipe::udpipe_annotate(udmodel,x = df_short$Speeches,tagger = "default", parser = "default",doc_id = df_short$ID)
+everyword_lemmatized <- as.data.frame(everyword_lemmatized)
+#saveRDS(everyword_lemmatized,"/Users/osmandemirbag/Desktop/TBMM/lemmatized_short.Rds")
+
+lemmatized_short <- readRDS("/Users/osmandemirbag/Desktop/TBMM/lemmatized_short.Rds")
+cooc <- cooccurrence(lemmatized_short, group = "doc_id", term = "lemma")
+x <- as.matrix(cooc)
+x <- quanteda::as.fcm(x)
+
+my_stopwords <- readLines("/Users/osmandemirbag/Desktop/TBMM/stopwords_tr.txt",  encoding="UTF-8")
+fcmat_stop <- fcm_select(x, pattern = my_stopwords, selection = "remove") # removing customized stopwords
+
+# 2.3 create sub-matrix of 100x100 with "demokrasi"
+words <- names(topfeatures(fcmat_stop["demokrasi",], n = 100)) 
+words
+fcm_sub <- fcm_select(fcmat_stop, pattern = words, selection = "keep") #creating sub-matrix
+#saveRDS(fcm_sub, "/Users/osmandemirbag/Desktop/TBMM/fcm_sub.Rds")
+
+fcm_matrix <- as.matrix(fcm_sub)
+graph <- graph.adjacency(fcm_matrix,
+                         weighted=TRUE,
+                         mode="undirected",
+                         diag=FALSE)
+
+#2.4 community detection and plot 
+louvain  <- cluster_louvain(graph,resolution=1)
+louvain
+coords = layout_with_fr(graph)
+plot(louvain, graph, layout=coords,force=T)
+#louvain <- readRDS("/Users/osmandemirbag/Desktop/TBMM/louvain.Rds")
+weber <- as.data.frame(louvain[[1]])
+marx <- as.data.frame(louvain[[2]])
+citizenship <- as.data.frame(louvain[[3]])
+durkheim <- as.data.frame(louvain[[4]])
+
+weber$memberships <- "Leadership Democracy"
+marx$memberships <-"Battle for Democracy"
+citizenship$memberships <- "Citizenship and Human Rights"
+durkheim$memberships <-"Social Solidarity in a Nation"
+
+weber$words <- weber$`louvain[[1]]` 
+weber = subset(weber, select = -c(1)) #drop first IDs
+
+marx$words <- marx$`louvain[[2]]` 
+marx = subset(marx, select = -c(1)) #drop first louvain to merge
+
+citizenship$words <- citizenship$`louvain[[3]]` 
+citizenship = subset(citizenship, select = -c(1)) #drop first IDs
+
+durkheim$words <- durkheim$`louvain[[4]]` 
+durkheim = subset(durkheim, select = -c(1)) #drop first IDs
+
+a <- rbind(marx,weber)
+b <- rbind(citizenship,durkheim)
+df_words <- rbind(a,b)
+################################################################################
+################################################################################
+
+#Ideological Positioning in the Field
+
+#lemmatized_short$ID <- lemmatized_short$doc_id
+#lemmatized_short = subset(lemmatized_short, select = -c(1)) #drop first IDs
+#df_lemma <- merge(df_short,lemmatized_short, by="ID")
+
+################################################################################
+################################################################################
+
+CMDdemokrasi <- readRDS("/Users/osmandemirbag/Desktop/TBMM/CMDdemokrasi.Rds")
+
+# Prepare data 
+CMD_short <- CMDdemokrasi[CMDdemokrasi$cmd > 1, ]
+CMD_short <- CMD_short[!duplicated(CMD_short[,-2]),]
+df_short = subset(CMD_short, select = -c(1)) #drop first IDs
+
+#load word translations xml
+
+translations_last <- read_excel("~/Desktop/translations_last.xlsx")
+
+df_short$token <- quanteda::tokens(df_short$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  tokens_tolower()
+
+df_freq_100 = tokens_select(df_short$token, pattern = c(translations_last$Words))
+df_short = subset(df_short, select = -c(23)) #drop token variable
+
+df_short$ülke = as.numeric(lapply(df_freq_100, function(x) length(which(x == "ülke"))))
+df_short$hak = as.numeric(lapply(df_freq_100, function(x) length(which(x == "hak"))))
+df_short$devlet = as.numeric(lapply(df_freq_100, function(x) length(which(x == "devlet"))))
+df_short$hukuk = as.numeric(lapply(df_freq_100, function(x) length(which(x == "hukuk"))))
+df_short$özgürlük = as.numeric(lapply(df_freq_100, function(x) length(which(x == "özgürlük"))))
+df_short$insan = as.numeric(lapply(df_freq_100, function(x) length(which(x == "insan"))))
+df_short$iktidar = as.numeric(lapply(df_freq_100, function(x) length(which(x == "iktidar"))))
+df_short$karşı = as.numeric(lapply(df_freq_100, function(x) length(which(x == "karşı"))))
+df_short$türkiye = as.numeric(lapply(df_freq_100, function(x) length(which(x == "türkiye"))))
+
+df_short$sorun = as.numeric(lapply(df_freq_100, function(x) length(which(x == "sorun"))))
+df_short$zaman = as.numeric(lapply(df_freq_100, function(x) length(which(x == "zaman"))))
+df_short$irade = as.numeric(lapply(df_freq_100, function(x) length(which(x == "irade"))))
+df_short$mücadele = as.numeric(lapply(df_freq_100, function(x) length(which(x == "mücadele"))))
+df_short$orta = as.numeric(lapply(df_freq_100, function(x) length(which(x == "orta"))))
+df_short$toplum = as.numeric(lapply(df_freq_100, function(x) length(which(x == "toplum"))))
+df_short$konu = as.numeric(lapply(df_freq_100, function(x) length(which(x == "konu"))))
+df_short$seçim = as.numeric(lapply(df_freq_100, function(x) length(which(x == "seçim"))))
+df_short$yasa = as.numeric(lapply(df_freq_100, function(x) length(which(x == "yasa"))))
+
+df_short$yönetim = as.numeric(lapply(df_freq_100, function(x) length(which(x == "yönetim"))))
+df_short$millî = as.numeric(lapply(df_freq_100, function(x) length(which(x == "millî"))))
+df_short$rejim = as.numeric(lapply(df_freq_100, function(x) length(which(x == "rejim"))))
+df_short$ifade = as.numeric(lapply(df_freq_100, function(x) length(which(x == "ifade"))))
+df_short$yargı = as.numeric(lapply(df_freq_100, function(x) length(which(x == "yargı"))))
+df_short$tarih = as.numeric(lapply(df_freq_100, function(x) length(which(x == "tarih"))))
+df_short$dünya = as.numeric(lapply(df_freq_100, function(x) length(which(x == "dünya"))))
+df_short$terör = as.numeric(lapply(df_freq_100, function(x) length(which(x == "terör"))))
+df_short$güç = as.numeric(lapply(df_freq_100, function(x) length(which(x == "güç"))))
+
+df_short$doğru = as.numeric(lapply(df_freq_100, function(x) length(which(x == "doğru"))))
+df_short$karar = as.numeric(lapply(df_freq_100, function(x) length(which(x == "karar"))))
+df_short$türk = as.numeric(lapply(df_freq_100, function(x) length(which(x == "türk"))))
+df_short$kur = as.numeric(lapply(df_freq_100, function(x) length(which(x == "kur"))))
+df_short$süreç = as.numeric(lapply(df_freq_100, function(x) length(which(x == "süreç"))))
+df_short$taraf = as.numeric(lapply(df_freq_100, function(x) length(which(x == "taraf"))))
+df_short$iş = as.numeric(lapply(df_freq_100, function(x) length(which(x == "iş"))))
+df_short$kurum = as.numeric(lapply(df_freq_100, function(x) length(which(x == "kurum"))))
+df_short$dış = as.numeric(lapply(df_freq_100, function(x) length(which(x == "dış"))))
+
+df_short$ilke = as.numeric(lapply(df_freq_100, function(x) length(which(x == "ilke"))))
+df_short$saygı = as.numeric(lapply(df_freq_100, function(x) length(which(x == "saygı"))))
+df_short$kan = as.numeric(lapply(df_freq_100, function(x) length(which(x == "kan"))))
+df_short$toplumsal = as.numeric(lapply(df_freq_100, function(x) length(which(x == "toplumsal"))))
+df_short$politika = as.numeric(lapply(df_freq_100, function(x) length(which(x == "politika"))))
+df_short$gerçek = as.numeric(lapply(df_freq_100, function(x) length(which(x == "gerçek"))))
+df_short$parlamento = as.numeric(lapply(df_freq_100, function(x) length(which(x == "parlamento"))))
+df_short$güvenlik = as.numeric(lapply(df_freq_100, function(x) length(which(x == "güvenlik"))))
+df_short$yapı = as.numeric(lapply(df_freq_100, function(x) length(which(x == "yapı"))))
+
+df_short$iyi = as.numeric(lapply(df_freq_100, function(x) length(which(x == "iyi"))))
+df_short$hayat = as.numeric(lapply(df_freq_100, function(x) length(which(x == "hayat"))))
+df_short$kuvvet = as.numeric(lapply(df_freq_100, function(x) length(which(x == "kuvvet"))))
+df_short$kürt = as.numeric(lapply(df_freq_100, function(x) length(which(x == "kürt"))))
+df_short$nokta = as.numeric(lapply(df_freq_100, function(x) length(which(x == "nokta"))))
+df_short$ortak = as.numeric(lapply(df_freq_100, function(x) length(which(x == "ortak"))))
+df_short$örgüt = as.numeric(lapply(df_freq_100, function(x) length(which(x == "örgüt"))))
+df_short$sivil = as.numeric(lapply(df_freq_100, function(x) length(which(x == "sivil"))))
+df_short$mahkeme = as.numeric(lapply(df_freq_100, function(x) length(which(x == "mahkeme"))))
+
+df_short$talep = as.numeric(lapply(df_freq_100, function(x) length(which(x == "talep"))))
+df_short$ekonomi = as.numeric(lapply(df_freq_100, function(x) length(which(x == "ekonomi"))))
+df_short$temmuz = as.numeric(lapply(df_freq_100, function(x) length(which(x == "temmuz"))))
+df_short$kişi = as.numeric(lapply(df_freq_100, function(x) length(which(x == "kişi"))))
+df_short$kadın = as.numeric(lapply(df_freq_100, function(x) length(which(x == "kadın"))))
+df_short$kültür = as.numeric(lapply(df_freq_100, function(x) length(which(x == "kültür"))))
+df_short$görev = as.numeric(lapply(df_freq_100, function(x) length(which(x == "görev"))))
+df_short$üstünlük = as.numeric(lapply(df_freq_100, function(x) length(which(x == "üstünlük"))))
+df_short$sonuç = as.numeric(lapply(df_freq_100, function(x) length(which(x == "sonuç"))))
+
+df_short$egemenlik = as.numeric(lapply(df_freq_100, function(x) length(which(x == "egemenlik"))))
+df_short$yerel = as.numeric(lapply(df_freq_100, function(x) length(which(x == "yerel"))))
+df_short$ihtiyaç = as.numeric(lapply(df_freq_100, function(x) length(which(x == "ihtiyaç"))))
+df_short$uygulama = as.numeric(lapply(df_freq_100, function(x) length(which(x == "uygulama"))))
+df_short$kavram = as.numeric(lapply(df_freq_100, function(x) length(which(x == "kavram"))))
+df_short$müdahale = as.numeric(lapply(df_freq_100, function(x) length(which(x == "müdahale"))))
+df_short$yaşam = as.numeric(lapply(df_freq_100, function(x) length(which(x == "yaşam"))))
+df_short$kural = as.numeric(lapply(df_freq_100, function(x) length(which(x == "kural"))))
+df_short$ilk = as.numeric(lapply(df_freq_100, function(x) length(which(x == "ilk"))))
+
+df_short$yetki = as.numeric(lapply(df_freq_100, function(x) length(which(x == "yetki"))))
+df_short$özgür = as.numeric(lapply(df_freq_100, function(x) length(which(x == "özgür"))))
+df_short$vatandaş = as.numeric(lapply(df_freq_100, function(x) length(which(x == "vatandaş"))))
+df_short$eşit = as.numeric(lapply(df_freq_100, function(x) length(which(x == "eşit"))))
+df_short$ortam = as.numeric(lapply(df_freq_100, function(x) length(which(x == "ortam"))))
+df_short$şiddet = as.numeric(lapply(df_freq_100, function(x) length(which(x == "şiddet"))))
+df_short$teklif = as.numeric(lapply(df_freq_100, function(x) length(which(x == "teklif"))))
+df_short$hedef = as.numeric(lapply(df_freq_100, function(x) length(which(x == "hedef"))))
+df_short$medya = as.numeric(lapply(df_freq_100, function(x) length(which(x == "medya"))))
+
+df_short$girişim = as.numeric(lapply(df_freq_100, function(x) length(which(x == "girişim"))))
+df_short$varlık = as.numeric(lapply(df_freq_100, function(x) length(which(x == "varlık"))))
+df_short$temsil = as.numeric(lapply(df_freq_100, function(x) length(which(x == "temsil"))))
+df_short$ilişki = as.numeric(lapply(df_freq_100, function(x) length(which(x == "ilişki"))))
+df_short$süre = as.numeric(lapply(df_freq_100, function(x) length(which(x == "süre"))))
+df_short$hesap = as.numeric(lapply(df_freq_100, function(x) length(which(x == "hesap"))))
+df_short$silah = as.numeric(lapply(df_freq_100, function(x) length(which(x == "silah"))))
+df_short$inanç = as.numeric(lapply(df_freq_100, function(x) length(which(x == "inanç"))))
+df_short$dil = as.numeric(lapply(df_freq_100, function(x) length(which(x == "dil"))))
+
+df_short$savaş = as.numeric(lapply(df_freq_100, function(x) length(which(x == "savaş"))))
+df_short$düşünce = as.numeric(lapply(df_freq_100, function(x) length(which(x == "düşünce"))))
+df_short$eğitim = as.numeric(lapply(df_freq_100, function(x) length(which(x == "eğitim"))))
+df_short$denetim = as.numeric(lapply(df_freq_100, function(x) length(which(x == "denetim"))))
+df_short$vesayet = as.numeric(lapply(df_freq_100, function(x) length(which(x == "vesayet"))))
+df_short$güvence = as.numeric(lapply(df_freq_100, function(x) length(which(x == "güvence"))))
+df_short$olay = as.numeric(lapply(df_freq_100, function(x) length(which(x == "olay"))))
+df_short$yeniden = as.numeric(lapply(df_freq_100, function(x) length(which(x == "yeniden"))))
+df_short$şart = as.numeric(lapply(df_freq_100, function(x) length(which(x == "şart"))))
+df_short$göz = as.numeric(lapply(df_freq_100, function(x) length(which(x == "göz"))))
+
+short_chp <- df_short %>% filter(Speaker_party=="CHP")
+short_akp <- df_short %>% filter(Speaker_party=="AKP AK Party")
+short_mhp <- df_short %>% filter(Speaker_party=="MHP")
+short_hdp <- df_short %>% filter(Speaker_party=="HDP")
+
+short_chp$sum_of_words <- quanteda::ntoken(short_chp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  sum()
+short_chp$sum_of_words = as.numeric(short_chp$sum_of_words, force=TRUE)
+
+short_akp$sum_of_words <- quanteda::ntoken(short_akp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  sum()
+short_akp$sum_of_words = as.numeric(short_akp$sum_of_words)
+
+short_mhp$sum_of_words <- quanteda::ntoken(short_mhp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  sum()
+short_mhp$sum_of_words = as.numeric(short_mhp$sum_of_words)
+
+short_hdp$sum_of_words <- quanteda::ntoken(short_hdp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  sum()
+short_hdp$sum_of_words = as.numeric(short_hdp$sum_of_words)
+
+
+short_chp_demokrasi = short_chp %>% summarise(country = sum(ülke/sum_of_words),
+                                              right = sum(hak/sum_of_words),
+                                              state = sum(devlet/sum_of_words),
+                                              law = sum(hukuk/sum_of_words),
+                                              freedom = sum(özgürlük/sum_of_words),
+                                              human = sum(insan/sum_of_words),
+                                              power = sum(iktidar/sum_of_words),
+                                              contra = sum(karşı/sum_of_words),
+                                              turkey = sum(türkiye/sum_of_words),
+                                              problem = sum(sorun/sum_of_words),
+                                              time = sum(zaman/sum_of_words),
+                                              will = sum(irade/sum_of_words),
+                                              struggle = sum(mücadele/sum_of_words),
+                                              central = sum(orta/sum_of_words),
+                                              society = sum(toplum/sum_of_words),
+                                              topic = sum(konu/sum_of_words),
+                                              election = sum(seçim/sum_of_words),
+                                              code = sum(yasa/sum_of_words),
+                                              
+                                              government = sum(yönetim/sum_of_words),
+                                              national = sum(millî/sum_of_words),
+                                              regime = sum(rejim/sum_of_words),
+                                              expression = sum(ifade/sum_of_words),
+                                              jurisdiction = sum(yargı/sum_of_words),
+                                              history = sum(tarih/sum_of_words),
+                                              world = sum(dünya/sum_of_words),
+                                              terror = sum(terör/sum_of_words),
+                                              strength = sum(güç/sum_of_words),
+                                              
+                                              accurate = sum(doğru/sum_of_words),
+                                              decision = sum(karar/sum_of_words),
+                                              turkish = sum(türk/sum_of_words),
+                                              rate = sum(kur/sum_of_words),
+                                              process = sum(süreç/sum_of_words),
+                                              side = sum(taraf/sum_of_words),
+                                              work = sum(iş/sum_of_words),
+                                              institution = sum(kurum/sum_of_words),
+                                              outer = sum(dış/sum_of_words),
+                                              
+                                              principle = sum(ilke/sum_of_words),
+                                              respect = sum(saygı/sum_of_words),
+                                              blood = sum(kan/sum_of_words),
+                                              societal = sum(toplumsal/sum_of_words),
+                                              politics = sum(politika/sum_of_words),
+                                              real = sum(gerçek/sum_of_words),
+                                              parliament = sum(parlamento/sum_of_words),
+                                              security = sum(güvenlik/sum_of_words),
+                                              structure = sum(yapı/sum_of_words),
+                                              
+                                              good = sum(iyi/sum_of_words),
+                                              life = sum(hayat/sum_of_words),
+                                              force = sum(kuvvet/sum_of_words),
+                                              kurdish = sum(kürt/sum_of_words),
+                                              point = sum(nokta/sum_of_words),
+                                              common = sum(ortak/sum_of_words),
+                                              organization = sum(örgüt/sum_of_words),
+                                              civil = sum(sivil/sum_of_words),
+                                              court = sum(mahkeme/sum_of_words),
+                                              
+                                              demand = sum(talep/sum_of_words),
+                                              economics = sum(ekonomi/sum_of_words),
+                                              july = sum(temmuz/sum_of_words),
+                                              person = sum(kişi/sum_of_words),
+                                              woman = sum(kadın/sum_of_words),
+                                              culture = sum(kültür/sum_of_words),
+                                              duty = sum(görev/sum_of_words),
+                                              superiority = sum(üstünlük/sum_of_words),
+                                              result = sum(sonuç/sum_of_words),
+                                              
+                                              sovereignty = sum(egemenlik/sum_of_words),
+                                              local = sum(yerel/sum_of_words),
+                                              need = sum(ihtiyaç/sum_of_words),
+                                              application = sum(uygulama/sum_of_words),
+                                              concept = sum(kavram/sum_of_words),
+                                              intervention = sum(müdahale/sum_of_words),
+                                              experience = sum(yaşam/sum_of_words),
+                                              rule= sum(kural/sum_of_words),
+                                              first = sum(ilk/sum_of_words),
+                                              
+                                              warrant = sum(yetki/sum_of_words),
+                                              liberal = sum(özgür/sum_of_words),
+                                              citizen = sum(vatandaş/sum_of_words),
+                                              equal = sum(eşit/sum_of_words),
+                                              context = sum(ortam/sum_of_words),
+                                              violence = sum(şiddet/sum_of_words),
+                                              proposal = sum(teklif/sum_of_words),
+                                              target = sum(hedef/sum_of_words),
+                                              press = sum(medya/sum_of_words),
+                                              
+                                              attempt = sum(girişim/sum_of_words),
+                                              wealth = sum(varlık/sum_of_words),
+                                              representation = sum(temsil/sum_of_words),
+                                              relation = sum(ilişki/sum_of_words),
+                                              period = sum(süre/sum_of_words),
+                                              calculation = sum(hesap/sum_of_words),
+                                              gun = sum(silah/sum_of_words),
+                                              belief = sum(inanç/sum_of_words),
+                                              language = sum(dil/sum_of_words),
+                                              
+                                              war = sum(savaş/sum_of_words),
+                                              idea = sum(düşünce/sum_of_words),
+                                              education = sum(eğitim/sum_of_words),
+                                              inspection = sum(denetim/sum_of_words),
+                                              tutelage = sum(vesayet/sum_of_words),
+                                              assurance = sum(güvence/sum_of_words),
+                                              case = sum(olay/sum_of_words),
+                                              again = sum(yeniden/sum_of_words),
+                                              condition = sum(şart/sum_of_words),
+                                              eye = sum(göz/sum_of_words))
+
+
+short_mhp_demokrasi = short_mhp %>% summarise(country = sum(ülke/sum_of_words),
+                                              right = sum(hak/sum_of_words),
+                                              state = sum(devlet/sum_of_words),
+                                              law = sum(hukuk/sum_of_words),
+                                              freedom = sum(özgürlük/sum_of_words),
+                                              human = sum(insan/sum_of_words),
+                                              power = sum(iktidar/sum_of_words),
+                                              contra = sum(karşı/sum_of_words),
+                                              turkey = sum(türkiye/sum_of_words),
+                                              
+                                              problem = sum(sorun/sum_of_words),
+                                              time = sum(zaman/sum_of_words),
+                                              will = sum(irade/sum_of_words),
+                                              struggle = sum(mücadele/sum_of_words),
+                                              central = sum(orta/sum_of_words),
+                                              society = sum(toplum/sum_of_words),
+                                              topic = sum(konu/sum_of_words),
+                                              election = sum(seçim/sum_of_words),
+                                              code = sum(yasa/sum_of_words),
+                                              
+                                              government = sum(yönetim/sum_of_words),
+                                              national = sum(millî/sum_of_words),
+                                              regime = sum(rejim/sum_of_words),
+                                              expression = sum(ifade/sum_of_words),
+                                              jurisdiction = sum(yargı/sum_of_words),
+                                              history = sum(tarih/sum_of_words),
+                                              world = sum(dünya/sum_of_words),
+                                              terror = sum(terör/sum_of_words),
+                                              strength = sum(güç/sum_of_words),
+                                              
+                                              accurate = sum(doğru/sum_of_words),
+                                              decision = sum(karar/sum_of_words),
+                                              turkish = sum(türk/sum_of_words),
+                                              rate = sum(kur/sum_of_words),
+                                              process = sum(süreç/sum_of_words),
+                                              side = sum(taraf/sum_of_words),
+                                              work = sum(iş/sum_of_words),
+                                              institution = sum(kurum/sum_of_words),
+                                              outer = sum(dış/sum_of_words),
+                                              
+                                              principle = sum(ilke/sum_of_words),
+                                              respect = sum(saygı/sum_of_words),
+                                              blood = sum(kan/sum_of_words),
+                                              societal = sum(toplumsal/sum_of_words),
+                                              politics = sum(politika/sum_of_words),
+                                              real = sum(gerçek/sum_of_words),
+                                              parliament = sum(parlamento/sum_of_words),
+                                              security = sum(güvenlik/sum_of_words),
+                                              structure = sum(yapı/sum_of_words),
+                                              
+                                              good = sum(iyi/sum_of_words),
+                                              life = sum(hayat/sum_of_words),
+                                              force = sum(kuvvet/sum_of_words),
+                                              kurdish = sum(kürt/sum_of_words),
+                                              point = sum(nokta/sum_of_words),
+                                              common = sum(ortak/sum_of_words),
+                                              organization = sum(örgüt/sum_of_words),
+                                              civil = sum(sivil/sum_of_words),
+                                              court = sum(mahkeme/sum_of_words),
+                                              
+                                              demand = sum(talep/sum_of_words),
+                                              economics = sum(ekonomi/sum_of_words),
+                                              july = sum(temmuz/sum_of_words),
+                                              person = sum(kişi/sum_of_words),
+                                              woman = sum(kadın/sum_of_words),
+                                              culture = sum(kültür/sum_of_words),
+                                              duty = sum(görev/sum_of_words),
+                                              superiority = sum(üstünlük/sum_of_words),
+                                              result = sum(sonuç/sum_of_words),
+                                              
+                                              sovereignty = sum(egemenlik/sum_of_words),
+                                              local = sum(yerel/sum_of_words),
+                                              need = sum(ihtiyaç/sum_of_words),
+                                              application = sum(uygulama/sum_of_words),
+                                              concept = sum(kavram/sum_of_words),
+                                              intervention = sum(müdahale/sum_of_words),
+                                              experience = sum(yaşam/sum_of_words),
+                                              rule= sum(kural/sum_of_words),
+                                              first = sum(ilk/sum_of_words),
+                                              
+                                              warrant = sum(yetki/sum_of_words),
+                                              liberal = sum(özgür/sum_of_words),
+                                              citizen = sum(vatandaş/sum_of_words),
+                                              equal = sum(eşit/sum_of_words),
+                                              context = sum(ortam/sum_of_words),
+                                              violence = sum(şiddet/sum_of_words),
+                                              proposal = sum(teklif/sum_of_words),
+                                              target = sum(hedef/sum_of_words),
+                                              press = sum(medya/sum_of_words),
+                                              
+                                              attempt = sum(girişim/sum_of_words),
+                                              wealth = sum(varlık/sum_of_words),
+                                              representation = sum(temsil/sum_of_words),
+                                              relation = sum(ilişki/sum_of_words),
+                                              period = sum(süre/sum_of_words),
+                                              calculation = sum(hesap/sum_of_words),
+                                              gun = sum(silah/sum_of_words),
+                                              belief = sum(inanç/sum_of_words),
+                                              language = sum(dil/sum_of_words),
+                                              
+                                              war = sum(savaş/sum_of_words),
+                                              idea = sum(düşünce/sum_of_words),
+                                              education = sum(eğitim/sum_of_words),
+                                              inspection = sum(denetim/sum_of_words),
+                                              tutelage = sum(vesayet/sum_of_words),
+                                              assurance = sum(güvence/sum_of_words),
+                                              case = sum(olay/sum_of_words),
+                                              again = sum(yeniden/sum_of_words),
+                                              condition = sum(şart/sum_of_words),
+                                              eye = sum(göz/sum_of_words))
+
+short_akp_demokrasi = short_akp %>% summarise(country = sum(ülke/sum_of_words),
+                                              right = sum(hak/sum_of_words),
+                                              state = sum(devlet/sum_of_words),
+                                              law = sum(hukuk/sum_of_words),
+                                              freedom = sum(özgürlük/sum_of_words),
+                                              human = sum(insan/sum_of_words),
+                                              power = sum(iktidar/sum_of_words),
+                                              contra = sum(karşı/sum_of_words),
+                                              turkey = sum(türkiye/sum_of_words),
+                                              
+                                              problem = sum(sorun/sum_of_words),
+                                              time = sum(zaman/sum_of_words),
+                                              will = sum(irade/sum_of_words),
+                                              struggle = sum(mücadele/sum_of_words),
+                                              central = sum(orta/sum_of_words),
+                                              society = sum(toplum/sum_of_words),
+                                              topic = sum(konu/sum_of_words),
+                                              election = sum(seçim/sum_of_words),
+                                              code = sum(yasa/sum_of_words),
+                                              
+                                              government = sum(yönetim/sum_of_words),
+                                              national = sum(millî/sum_of_words),
+                                              regime = sum(rejim/sum_of_words),
+                                              expression = sum(ifade/sum_of_words),
+                                              jurisdiction = sum(yargı/sum_of_words),
+                                              history = sum(tarih/sum_of_words),
+                                              world = sum(dünya/sum_of_words),
+                                              terror = sum(terör/sum_of_words),
+                                              strength = sum(güç/sum_of_words),
+                                              
+                                              accurate = sum(doğru/sum_of_words),
+                                              decision = sum(karar/sum_of_words),
+                                              turkish = sum(türk/sum_of_words),
+                                              rate = sum(kur/sum_of_words),
+                                              process = sum(süreç/sum_of_words),
+                                              side = sum(taraf/sum_of_words),
+                                              work = sum(iş/sum_of_words),
+                                              institution = sum(kurum/sum_of_words),
+                                              outer = sum(dış/sum_of_words),
+                                              
+                                              principle = sum(ilke/sum_of_words),
+                                              respect = sum(saygı/sum_of_words),
+                                              blood = sum(kan/sum_of_words),
+                                              societal = sum(toplumsal/sum_of_words),
+                                              politics = sum(politika/sum_of_words),
+                                              real = sum(gerçek/sum_of_words),
+                                              parliament = sum(parlamento/sum_of_words),
+                                              security = sum(güvenlik/sum_of_words),
+                                              structure = sum(yapı/sum_of_words),
+                                              
+                                              good = sum(iyi/sum_of_words),
+                                              life = sum(hayat/sum_of_words),
+                                              force = sum(kuvvet/sum_of_words),
+                                              kurdish = sum(kürt/sum_of_words),
+                                              point = sum(nokta/sum_of_words),
+                                              common = sum(ortak/sum_of_words),
+                                              organization = sum(örgüt/sum_of_words),
+                                              civil = sum(sivil/sum_of_words),
+                                              court = sum(mahkeme/sum_of_words),
+                                              
+                                              demand = sum(talep/sum_of_words),
+                                              economics = sum(ekonomi/sum_of_words),
+                                              july = sum(temmuz/sum_of_words),
+                                              person = sum(kişi/sum_of_words),
+                                              woman = sum(kadın/sum_of_words),
+                                              culture = sum(kültür/sum_of_words),
+                                              duty = sum(görev/sum_of_words),
+                                              superiority = sum(üstünlük/sum_of_words),
+                                              result = sum(sonuç/sum_of_words),
+                                              
+                                              sovereignty = sum(egemenlik/sum_of_words),
+                                              local = sum(yerel/sum_of_words),
+                                              need = sum(ihtiyaç/sum_of_words),
+                                              application = sum(uygulama/sum_of_words),
+                                              concept = sum(kavram/sum_of_words),
+                                              intervention = sum(müdahale/sum_of_words),
+                                              experience = sum(yaşam/sum_of_words),
+                                              rule= sum(kural/sum_of_words),
+                                              first = sum(ilk/sum_of_words),
+                                              
+                                              warrant = sum(yetki/sum_of_words),
+                                              liberal = sum(özgür/sum_of_words),
+                                              citizen = sum(vatandaş/sum_of_words),
+                                              equal = sum(eşit/sum_of_words),
+                                              context = sum(ortam/sum_of_words),
+                                              violence = sum(şiddet/sum_of_words),
+                                              proposal = sum(teklif/sum_of_words),
+                                              target = sum(hedef/sum_of_words),
+                                              press = sum(medya/sum_of_words),
+                                              
+                                              attempt = sum(girişim/sum_of_words),
+                                              wealth = sum(varlık/sum_of_words),
+                                              representation = sum(temsil/sum_of_words),
+                                              relation = sum(ilişki/sum_of_words),
+                                              period = sum(süre/sum_of_words),
+                                              calculation = sum(hesap/sum_of_words),
+                                              gun = sum(silah/sum_of_words),
+                                              belief = sum(inanç/sum_of_words),
+                                              language = sum(dil/sum_of_words),
+                                              
+                                              war = sum(savaş/sum_of_words),
+                                              idea = sum(düşünce/sum_of_words),
+                                              education = sum(eğitim/sum_of_words),
+                                              inspection = sum(denetim/sum_of_words),
+                                              tutelage = sum(vesayet/sum_of_words),
+                                              assurance = sum(güvence/sum_of_words),
+                                              case = sum(olay/sum_of_words),
+                                              again = sum(yeniden/sum_of_words),
+                                              condition = sum(şart/sum_of_words),
+                                              eye = sum(göz/sum_of_words))
+
+short_hdp_demokrasi = short_hdp %>% summarise(country = sum(ülke/sum_of_words),
+                                              right = sum(hak/sum_of_words),
+                                              state = sum(devlet/sum_of_words),
+                                              law = sum(hukuk/sum_of_words),
+                                              freedom = sum(özgürlük/sum_of_words),
+                                              human = sum(insan/sum_of_words),
+                                              power = sum(iktidar/sum_of_words),
+                                              contra = sum(karşı/sum_of_words),
+                                              turkey = sum(türkiye/sum_of_words),
+                                              
+                                              problem = sum(sorun/sum_of_words),
+                                              time = sum(zaman/sum_of_words),
+                                              will = sum(irade/sum_of_words),
+                                              struggle = sum(mücadele/sum_of_words),
+                                              central = sum(orta/sum_of_words),
+                                              society = sum(toplum/sum_of_words),
+                                              topic = sum(konu/sum_of_words),
+                                              election = sum(seçim/sum_of_words),
+                                              code = sum(yasa/sum_of_words),
+                                              
+                                              government = sum(yönetim/sum_of_words),
+                                              national = sum(millî/sum_of_words),
+                                              regime = sum(rejim/sum_of_words),
+                                              expression = sum(ifade/sum_of_words),
+                                              jurisdiction = sum(yargı/sum_of_words),
+                                              history = sum(tarih/sum_of_words),
+                                              world = sum(dünya/sum_of_words),
+                                              terror = sum(terör/sum_of_words),
+                                              strength = sum(güç/sum_of_words),
+                                              
+                                              accurate = sum(doğru/sum_of_words),
+                                              decision = sum(karar/sum_of_words),
+                                              turkish = sum(türk/sum_of_words),
+                                              rate = sum(kur/sum_of_words),
+                                              process = sum(süreç/sum_of_words),
+                                              side = sum(taraf/sum_of_words),
+                                              work = sum(iş/sum_of_words),
+                                              institution = sum(kurum/sum_of_words),
+                                              outer = sum(dış/sum_of_words),
+                                              
+                                              principle = sum(ilke/sum_of_words),
+                                              respect = sum(saygı/sum_of_words),
+                                              blood = sum(kan/sum_of_words),
+                                              societal = sum(toplumsal/sum_of_words),
+                                              politics = sum(politika/sum_of_words),
+                                              real = sum(gerçek/sum_of_words),
+                                              parliament = sum(parlamento/sum_of_words),
+                                              security = sum(güvenlik/sum_of_words),
+                                              structure = sum(yapı/sum_of_words),
+                                              
+                                              good = sum(iyi/sum_of_words),
+                                              life = sum(hayat/sum_of_words),
+                                              force = sum(kuvvet/sum_of_words),
+                                              kurdish = sum(kürt/sum_of_words),
+                                              point = sum(nokta/sum_of_words),
+                                              common = sum(ortak/sum_of_words),
+                                              organization = sum(örgüt/sum_of_words),
+                                              civil = sum(sivil/sum_of_words),
+                                              court = sum(mahkeme/sum_of_words),
+                                              
+                                              demand = sum(talep/sum_of_words),
+                                              economics = sum(ekonomi/sum_of_words),
+                                              july = sum(temmuz/sum_of_words),
+                                              person = sum(kişi/sum_of_words),
+                                              woman = sum(kadın/sum_of_words),
+                                              culture = sum(kültür/sum_of_words),
+                                              duty = sum(görev/sum_of_words),
+                                              superiority = sum(üstünlük/sum_of_words),
+                                              result = sum(sonuç/sum_of_words),
+                                              
+                                              sovereignty = sum(egemenlik/sum_of_words),
+                                              local = sum(yerel/sum_of_words),
+                                              need = sum(ihtiyaç/sum_of_words),
+                                              application = sum(uygulama/sum_of_words),
+                                              concept = sum(kavram/sum_of_words),
+                                              intervention = sum(müdahale/sum_of_words),
+                                              experience = sum(yaşam/sum_of_words),
+                                              rule= sum(kural/sum_of_words),
+                                              first = sum(ilk/sum_of_words),
+                                              
+                                              warrant = sum(yetki/sum_of_words),
+                                              liberal = sum(özgür/sum_of_words),
+                                              citizen = sum(vatandaş/sum_of_words),
+                                              equal = sum(eşit/sum_of_words),
+                                              context = sum(ortam/sum_of_words),
+                                              violence = sum(şiddet/sum_of_words),
+                                              proposal = sum(teklif/sum_of_words),
+                                              target = sum(hedef/sum_of_words),
+                                              press = sum(medya/sum_of_words),
+                                              
+                                              attempt = sum(girişim/sum_of_words),
+                                              wealth = sum(varlık/sum_of_words),
+                                              representation = sum(temsil/sum_of_words),
+                                              relation = sum(ilişki/sum_of_words),
+                                              period = sum(süre/sum_of_words),
+                                              calculation = sum(hesap/sum_of_words),
+                                              gun = sum(silah/sum_of_words),
+                                              belief = sum(inanç/sum_of_words),
+                                              language = sum(dil/sum_of_words),
+                                              
+                                              war = sum(savaş/sum_of_words),
+                                              idea = sum(düşünce/sum_of_words),
+                                              education = sum(eğitim/sum_of_words),
+                                              inspection = sum(denetim/sum_of_words),
+                                              tutelage = sum(vesayet/sum_of_words),
+                                              assurance = sum(güvence/sum_of_words),
+                                              case = sum(olay/sum_of_words),
+                                              again = sum(yeniden/sum_of_words),
+                                              condition = sum(şart/sum_of_words),
+                                              eye = sum(göz/sum_of_words))
+rownames(short_akp_demokrasi) <- "Justice and Development Party(AKP)"
+rownames(short_chp_demokrasi) <- "Republican People's Party(CHP)"
+rownames(short_mhp_demokrasi) <- "Nationalist Movement Party(MHP)"
+rownames(short_hdp_demokrasi) <- "People's Democratic Party(HDP)"
+
+short_akp_demokrasi <- t(short_akp_demokrasi)
+short_hdp_demokrasi <- t(short_hdp_demokrasi)
+short_chp_demokrasi <- t(short_chp_demokrasi)
+short_mhp_demokrasi <- t(short_mhp_demokrasi)
+
+short_akp_demokrasi <- as.data.frame(short_akp_demokrasi)
+short_hdp_demokrasi <- as.data.frame(short_hdp_demokrasi)
+short_chp_demokrasi <- as.data.frame(short_chp_demokrasi)
+short_mhp_demokrasi <- as.data.frame(short_mhp_demokrasi)
+
+short_akp_demokrasi <- t(short_akp_demokrasi)
+short_hdp_demokrasi <- t(short_hdp_demokrasi)
+short_chp_demokrasi <- t(short_chp_demokrasi)
+short_mhp_demokrasi <- t(short_mhp_demokrasi)
+
+short_akp_demokrasi <- as.data.frame(short_akp_demokrasi)
+short_hdp_demokrasi <- as.data.frame(short_hdp_demokrasi)
+short_chp_demokrasi <- as.data.frame(short_chp_demokrasi)
+short_mhp_demokrasi <- as.data.frame(short_mhp_demokrasi)
+
+akpchp <- rbind(short_akp_demokrasi,short_chp_demokrasi)
+mhphdp <- rbind(short_mhp_demokrasi,short_hdp_demokrasi)
+df_parties <- rbind(akpchp,mhphdp)
+
+res.pca <- PCA(df_parties, scale.unit = TRUE, ncp = 5, graph = TRUE)
+get_pca_var(res.pca)
+
+habillage <- as.factor(translations_last$Memberships)
+pca.plot <- fviz_pca_biplot(res.pca,
+                            geom.var = c("point", "text"),
+                            repel=TRUE)
+ggpubr::ggpar(pca.plot,
+              title = "Representation of Terms and Parties Together",
+              subtitle = "Principal Component Analysis",
+              xlab = "PC1 (%48.1)", ylab = "PC2(%30)",
+              ggtheme = theme_gray(), 
+              legend.title = "4 Different Meanings of Democracy",
+              palette = "jco")
+
+################################################################################
+################################################################################
+
+#Hostility and Support Scores
+
+################################################################################
+################################################################################
+
+tbmm_corpus <- readRDS("/Users/osmandemirbag/Desktop/TBMM/TBMMCorpus.Rds")
+
+short_chp <- tbmm_corpus %>% filter(Speaker_party=="CHP")
+short_akp <- tbmm_corpus %>% filter(Speaker_party=="AKP AK Party")
+short_mhp <- tbmm_corpus %>% filter(Speaker_party=="MHP")
+short_hdp <- tbmm_corpus %>% filter(Speaker_party=="HDP")
+
+## SUPPORT and HOSTILITY scores for every party
+#CHP
+short_chp$token <- quanteda::tokens(short_chp$Speeches,remove_punct = FALSE, remove_numbers = FALSE, remove_symbols = FALSE,padding = TRUE)
+
+chp_chp_support1 = kwic(short_chp$token, pattern = phrase("CHP sıralarından alkışlar"))
+chp_chp_support2 = kwic(short_chp$token, pattern = phrase("CHP sıralarından bravo"))
+chp_akp_support1 = kwic(short_chp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+chp_akp_support2 = kwic(short_chp$token, pattern = phrase("AK PARTİ sıralarından bravo"))
+chp_hdp_support1 = kwic(short_chp$token, pattern = phrase("HDP sıralarından alkışlar"))
+chp_hdp_support2 = kwic(short_chp$token, pattern = phrase("HDP sıralarından bravo"))
+chp_mhp_support1 = kwic(short_chp$token, pattern = phrase("MHP sıralarından alkışlar"))
+chp_mhp_support2 = kwic(short_chp$token, pattern = phrase("MHP sıralarından bravo"))
+
+chp_chp_hostility1 = kwic(short_chp$token, pattern = phrase("CHP sıralarından gürültüler"))
+chp_chp_hostility2 = kwic(short_chp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+chp_akp_hostility1 = kwic(short_chp$token, pattern = phrase("AK PARTİ sıralarından gel sesleri"))
+chp_akp_hostility2 = kwic(short_chp$token, pattern = phrase("AK PARTİ sıralarından gürültüler"))
+
+
+chp_mhp_hostility1 = kwic(short_chp$token, pattern = phrase("MHP sıralarından gel sesleri"))
+chp_mhp_hostility2 = kwic(short_chp$token, pattern = phrase("MHP sıralarından gürültüler"))
+
+chp_hdp_hostility1 = kwic(short_chp$token, pattern = phrase("HDP sıralarından gürültüler"))
+chp_hdp_hostility2 = kwic(short_chp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+
+#AKP
+short_akp$token <- quanteda::tokens(short_akp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  tokens_remove(stopwords::stopwords("tr", source = "stopwords-iso")) %>%
+  tokens_remove(stop_words) %>%
+  tokens_tolower()
+
+akp_akp_support1 = kwic(short_akp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+akp_akp_support2 = kwic(short_akp$token, pattern = phrase("AK PARTİ sıralarından bravo sesleri"))
+
+akp_chp_support1 = kwic(short_akp$token, pattern = phrase("CHP sıralarından alkışlar"))
+akp_chp_support2 = kwic(short_akp$token, pattern = phrase("CHP sıralarından bravo"))
+
+akp_hdp_support1 = kwic(short_akp$token, pattern = phrase("HDP sıralarından alkışlar"))
+akp_hdp_support2 = kwic(short_akp$token, pattern = phrase("HDP sıralarından bravo"))
+
+akp_mhp_support1 = kwic(short_akp$token, pattern = phrase("MHP sıralarından alkışlar"))
+akp_mhp_support2 = kwic(short_akp$token, pattern = phrase("MHP sıralarından bravo"))
+
+akp_akp_hostility1 = kwic(short_akp$token, pattern = phrase("AK Parti sıralarından gel sesleri"))
+akp_akp_hostility2 = kwic(short_akp$token, pattern = phrase("Ak Parti sıralarından gürültüler"))
+akp_mhp_hostility1 = kwic(short_akp$token, pattern = phrase("MHP sıralarından gürültüler"))
+akp_mhp_hostility2 = kwic(short_akp$token, pattern = phrase("MHP sıralarından gel sesleri"))
+akp_hdp_hostility1 = kwic(short_akp$token, pattern = phrase("HDP sıralarından gürültüler"))
+akp_hdp_hostility2 = kwic(short_akp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+akp_chp_hostility1 = kwic(short_akp$token, pattern = phrase("CHP sıralarından gürültüler"))
+akp_chp_hostility2 = kwic(short_akp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+
+### MHP ###
+
+short_mhp$token <- quanteda::tokens(short_mhp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  tokens_remove(stopwords::stopwords("tr", source = "stopwords-iso")) %>%
+  tokens_remove(stop_words) %>%
+  tokens_tolower()
+mhp_mhp_support1 = kwic(short_mhp$token, pattern = phrase("MHP sıralarından alkışlar"))
+mhp_mhp_support2 = kwic(short_mhp$token, pattern = phrase("MHP sıralarından bravo"))
+mhp_chp_support1 = kwic(short_mhp$token, pattern = phrase("CHP sıralarından alkışlar"))
+mhp_chp_support2 = kwic(short_mhp$token, pattern = phrase("CHP sıralarından bravo"))
+mhp_hdp_support1 = kwic(short_mhp$token, pattern = phrase("HDP sıralarından alkışlar"))
+mhp_hdp_support2 = kwic(short_mhp$token, pattern = phrase("HDP sıralarından bravo"))
+mhp_akp_support1 = kwic(short_mhp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+mhp_akp_support2 = kwic(short_mhp$token, pattern = phrase("AK PARTİ sıralarından bravo"))
+
+mhp_mhp_hostility1 = kwic(short_mhp$token, pattern = phrase("MHP sıralarından gel sesleri"))
+mhp_mhp_hostility2 = kwic(short_mhp$token, pattern = phrase("MHP sıralarından gürültüler"))
+mhp_akp_hostility1 = kwic(short_mhp$token, pattern = phrase("AK PARTİ sıralarından gürültüler"))
+mhp_akp_hostility2 = kwic(short_mhp$token, pattern = phrase("AK PARTİ sıralarından gel sesleri"))
+mhp_hdp_hostility1 = kwic(short_mhp$token, pattern = phrase("HDP sıralarından gürültüler"))
+mhp_hdp_hostility2 = kwic(short_mhp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+mhp_chp_hostility1 = kwic(short_mhp$token, pattern = phrase("CHP sıralarından gürültüler"))
+mhp_chp_hostility2 = kwic(short_mhp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+
+### HDP ###
+
+short_hdp$token <- quanteda::tokens(short_hdp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  tokens_remove(stopwords::stopwords("tr", source = "stopwords-iso")) %>%
+  tokens_remove(stop_words) %>%
+  tokens_tolower()
+
+hdp_hdp_support1 = kwic(short_hdp$token, pattern = phrase("HDP sıralarından alkışlar"))
+hdp_hdp_support2 = kwic(short_hdp$token, pattern = phrase("HDP sıralarından bravo"))
+hdp_chp_support1 = kwic(short_hdp$token, pattern = phrase("CHP sıralarından alkışlar"))
+hdp_chp_support2 = kwic(short_hdp$token, pattern = phrase("CHP sıralarından bravo"))
+hdp_mhp_support1 = kwic(short_hdp$token, pattern = phrase("MHP sıralarından alkışlar"))
+hdp_mhp_support2 = kwic(short_hdp$token, pattern = phrase("MHP sıralarından bravo"))
+hdp_akp_support1 = kwic(short_hdp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+hdp_akp_support2 = kwic(short_hdp$token, pattern = phrase("AK PARTİ sıralarından bravo"))
+
+hdp_akp_hostility1 = kwic(short_hdp$token, pattern = phrase("AK PARTİ sıralarından gel sesleri"))
+hdp_akp_hostility2 = kwic(short_hdp$token, pattern = phrase("AK PARTİ sıralarından gürültüler"))
+hdp_mhp_hostility1 = kwic(short_hdp$token, pattern = phrase("MHP sıralarından gürültüler"))
+hdp_mhp_hostility2 = kwic(short_hdp$token, pattern = phrase("MHP sıralarından"))
+hdp_hdp_hostility1 = kwic(short_hdp$token, pattern = phrase("HDP sıralarından gürültüler"))
+hdp_hdp_hostility2 = kwic(short_hdp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+hdp_chp_hostility1 = kwic(short_hdp$token, pattern = phrase("CHP sıralarından gürültüler"))
+hdp_chp_hostility2 = kwic(short_hdp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+akp_akp_support <- as.numeric(nrow(akp_akp_support1) + nrow(akp_akp_support2))
+akp_chp_support <- as.numeric(nrow(akp_chp_support1) + nrow(akp_chp_support2) + nrow(chp_akp_support1) + nrow(chp_akp_support2))
+akp_mhp_support <- as.numeric(nrow(akp_mhp_support1) + nrow(akp_mhp_support2) + nrow(mhp_akp_support1) + nrow(mhp_akp_support2))
+akp_hdp_support <- as.numeric(nrow(akp_hdp_support1) + nrow(akp_hdp_support2) + nrow(hdp_akp_support1) + nrow(hdp_akp_support2))
+chp_mhp_support <- as.numeric(nrow(chp_mhp_support1) + nrow(chp_mhp_support2) + nrow(mhp_chp_support1) + nrow(mhp_chp_support2))
+chp_hdp_support <- as.numeric(nrow(chp_hdp_support1) + nrow(chp_hdp_support2) + nrow(hdp_chp_support1) + nrow(hdp_chp_support2))
+chp_chp_support <- as.numeric(nrow(chp_chp_support1) + nrow(chp_chp_support2))
+hdp_hdp_support <- as.numeric(nrow(hdp_hdp_support1) + nrow(akp_hdp_support2))
+hdp_mhp_support <- as.numeric(nrow(hdp_mhp_support1) + nrow(hdp_mhp_support2) + nrow(mhp_hdp_support1) + nrow(mhp_hdp_support2))
+mhp_mhp_support <- as.numeric(nrow(mhp_mhp_support1) + nrow(mhp_mhp_support2))
+
+akp_akp_hostility <- as.numeric(nrow(akp_akp_hostility1) + nrow(akp_akp_hostility2))
+akp_chp_hostility <- as.numeric(nrow(akp_chp_hostility1) + nrow(akp_chp_hostility2) + nrow(chp_akp_hostility1) + nrow(chp_akp_hostility2))
+akp_mhp_hostility <- as.numeric(nrow(akp_mhp_hostility1) + nrow(akp_mhp_hostility2) + nrow(mhp_akp_hostility1) + nrow(mhp_akp_hostility2))
+akp_hdp_hostility <- as.numeric(nrow(akp_hdp_hostility1) + nrow(akp_hdp_hostility2) + nrow(hdp_akp_hostility1) + nrow(hdp_akp_hostility2))
+chp_mhp_hostility <- as.numeric(nrow(chp_mhp_hostility1) + nrow(chp_mhp_hostility2) + nrow(mhp_chp_hostility1) + nrow(mhp_chp_hostility2))
+chp_hdp_hostility <- as.numeric(nrow(chp_hdp_hostility1) + nrow(chp_hdp_hostility2) + nrow(hdp_chp_hostility1) + nrow(hdp_chp_hostility2))
+chp_chp_hostility <- as.numeric(nrow(chp_chp_hostility1) + nrow(chp_chp_hostility2))
+hdp_hdp_hostility <- as.numeric(nrow(hdp_hdp_hostility1) + nrow(akp_hdp_hostility2))
+hdp_mhp_hostility <- as.numeric(nrow(hdp_mhp_hostility1) + nrow(hdp_mhp_hostility2) + nrow(mhp_hdp_hostility1) + nrow(mhp_hdp_hostility2))
+mhp_mhp_hostility <- as.numeric(nrow(mhp_mhp_hostility1) + nrow(mhp_mhp_hostility2))
+
+
+df_support_hostility <- data.frame(row.names= c("AKP-AKP","AKP-CHP","AKP-MHP","AKP-HDP","CHP-MHP","CHP-HDP","CHP-CHP","HDP-HDP","HDP-MHP","MHP-MHP"),
+                                   Support = c(akp_akp_support,akp_chp_support,akp_mhp_support,akp_hdp_support,chp_mhp_support,chp_hdp_support,chp_chp_support,hdp_hdp_support,hdp_mhp_support,mhp_mhp_support),
+                                   Hostility = c(akp_akp_hostility,akp_chp_hostility,akp_mhp_hostility,akp_hdp_support,chp_mhp_hostility,chp_hdp_hostility,chp_chp_hostility,hdp_hdp_hostility,hdp_mhp_hostility,mhp_mhp_hostility))
+
+
+pca.support.hostility <- PCA(df_support_hostility, scale.unit = TRUE, ncp = 5, graph = TRUE)
+
+
+
+ind.p <- fviz_pca_biplot(pca.support.hostility, repel = TRUE)
+ind.p
+ggpubr::ggpar(ind.p,
+              title = "Dyadic Representation of Hostility and Support Scores",
+              subtitle = "Principal Component Analysis",
+              xlab = "PC1(%59.1)", ylab = "PC2(40.9)",
+              ggtheme = theme_gray(), palette = "jco")
+
+##########################################################################
+#2013-2015 and 2015-2016 periods
+##########################################################################
+#FOR THE FIRST PERIOD
+
+tbmm_corpus <- readRDS("/Users/osmandemirbag/Desktop/TBMM/TBMMCorpus.Rds")
+
+tbmm_corpus$Year <- lubridate::as_date(tbmm_corpus$From)
+
+period_1 <- tbmm_corpus %>% filter(between(From, as.Date('2013-06-01'), as.Date('2015-06-06')))
+
+long_chp <- period_1 %>% filter(Speaker_party=="CHP")
+long_akp <- period_1 %>% filter(Speaker_party=="AKP AK Party")
+long_mhp <- period_1 %>% filter(Speaker_party=="MHP")
+long_hdp <- period_1 %>% filter(Speaker_party=="HDP")
+
+## SUPPORT and HOSTILITY scores for every party
+#CHP
+long_chp$token <- quanteda::tokens(long_chp$Speeches,remove_punct = FALSE, remove_numbers = FALSE, remove_symbols = FALSE,padding = TRUE)
+
+chp_chp_support1 = kwic(long_chp$token, pattern = phrase("CHP sıralarından alkışlar"))
+chp_chp_support2 = kwic(long_chp$token, pattern = phrase("CHP sıralarından bravo"))
+chp_akp_support1 = kwic(long_chp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+chp_akp_support2 = kwic(long_chp$token, pattern = phrase("AK PARTİ sıralarından bravo"))
+chp_hdp_support1 = kwic(long_chp$token, pattern = phrase("HDP sıralarından alkışlar"))
+chp_hdp_support2 = kwic(long_chp$token, pattern = phrase("HDP sıralarından bravo"))
+chp_mhp_support1 = kwic(long_chp$token, pattern = phrase("MHP sıralarından alkışlar"))
+chp_mhp_support2 = kwic(long_chp$token, pattern = phrase("MHP sıralarından bravo"))
+
+chp_chp_hostility1 = kwic(long_chp$token, pattern = phrase("CHP sıralarından gürültüler"))
+chp_chp_hostility2 = kwic(long_chp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+chp_akp_hostility1 = kwic(long_chp$token, pattern = phrase("AK PARTİ sıralarından gel sesleri"))
+chp_akp_hostility2 = kwic(long_chp$token, pattern = phrase("AK PARTİ sıralarından gürültüler"))
+
+
+chp_mhp_hostility1 = kwic(long_chp$token, pattern = phrase("MHP sıralarından gel sesleri"))
+chp_mhp_hostility2 = kwic(long_chp$token, pattern = phrase("MHP sıralarından gürültüler"))
+
+chp_hdp_hostility1 = kwic(long_chp$token, pattern = phrase("HDP sıralarından gürültüler"))
+chp_hdp_hostility2 = kwic(long_chp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+
+#AKP
+long_akp$token <- quanteda::tokens(long_akp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  tokens_remove(stopwords::stopwords("tr", source = "stopwords-iso")) %>%
+  tokens_remove(stop_words) %>%
+  tokens_tolower()
+
+akp_akp_support1 = kwic(long_akp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+akp_akp_support2 = kwic(long_akp$token, pattern = phrase("AK PARTİ sıralarından bravo sesleri"))
+
+akp_chp_support1 = kwic(long_akp$token, pattern = phrase("CHP sıralarından alkışlar"))
+akp_chp_support2 = kwic(long_akp$token, pattern = phrase("CHP sıralarından bravo"))
+
+akp_hdp_support1 = kwic(long_akp$token, pattern = phrase("HDP sıralarından alkışlar"))
+akp_hdp_support2 = kwic(long_akp$token, pattern = phrase("HDP sıralarından bravo"))
+
+akp_mhp_support1 = kwic(long_akp$token, pattern = phrase("MHP sıralarından alkışlar"))
+akp_mhp_support2 = kwic(long_akp$token, pattern = phrase("MHP sıralarından bravo"))
+
+akp_akp_hostility1 = kwic(long_akp$token, pattern = phrase("AK Parti sıralarından gel sesleri"))
+akp_akp_hostility2 = kwic(long_akp$token, pattern = phrase("Ak Parti sıralarından gürültüler"))
+akp_mhp_hostility1 = kwic(long_akp$token, pattern = phrase("MHP sıralarından gürültüler"))
+akp_mhp_hostility2 = kwic(long_akp$token, pattern = phrase("MHP sıralarından gel sesleri"))
+akp_hdp_hostility1 = kwic(long_akp$token, pattern = phrase("HDP sıralarından gürültüler"))
+akp_hdp_hostility2 = kwic(long_akp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+akp_chp_hostility1 = kwic(long_akp$token, pattern = phrase("CHP sıralarından gürültüler"))
+akp_chp_hostility2 = kwic(long_akp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+
+### MHP ###
+
+long_mhp$token <- quanteda::tokens(long_mhp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  tokens_remove(stopwords::stopwords("tr", source = "stopwords-iso")) %>%
+  tokens_remove(stop_words) %>%
+  tokens_tolower()
+mhp_mhp_support1 = kwic(long_mhp$token, pattern = phrase("MHP sıralarından alkışlar"))
+mhp_mhp_support2 = kwic(long_mhp$token, pattern = phrase("MHP sıralarından bravo"))
+mhp_chp_support1 = kwic(long_mhp$token, pattern = phrase("CHP sıralarından alkışlar"))
+mhp_chp_support2 = kwic(long_mhp$token, pattern = phrase("CHP sıralarından bravo"))
+mhp_hdp_support1 = kwic(long_mhp$token, pattern = phrase("HDP sıralarından alkışlar"))
+mhp_hdp_support2 = kwic(long_mhp$token, pattern = phrase("HDP sıralarından bravo"))
+mhp_akp_support1 = kwic(long_mhp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+mhp_akp_support2 = kwic(long_mhp$token, pattern = phrase("AK PARTİ sıralarından bravo"))
+
+mhp_mhp_hostility1 = kwic(long_mhp$token, pattern = phrase("MHP sıralarından gel sesleri"))
+mhp_mhp_hostility2 = kwic(long_mhp$token, pattern = phrase("MHP sıralarından gürültüler"))
+mhp_akp_hostility1 = kwic(long_mhp$token, pattern = phrase("AK PARTİ sıralarından gürültüler"))
+mhp_akp_hostility2 = kwic(long_mhp$token, pattern = phrase("AK PARTİ sıralarından gel sesleri"))
+mhp_hdp_hostility1 = kwic(long_mhp$token, pattern = phrase("HDP sıralarından gürültüler"))
+mhp_hdp_hostility2 = kwic(long_mhp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+mhp_chp_hostility1 = kwic(long_mhp$token, pattern = phrase("CHP sıralarından gürültüler"))
+mhp_chp_hostility2 = kwic(long_mhp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+
+### HDP ###
+
+long_hdp$token <- quanteda::tokens(long_hdp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  tokens_remove(stopwords::stopwords("tr", source = "stopwords-iso")) %>%
+  tokens_remove(stop_words) %>%
+  tokens_tolower()
+
+hdp_hdp_support1 = kwic(long_hdp$token, pattern = phrase("HDP sıralarından alkışlar"))
+hdp_hdp_support2 = kwic(long_hdp$token, pattern = phrase("HDP sıralarından bravo"))
+hdp_chp_support1 = kwic(long_hdp$token, pattern = phrase("CHP sıralarından alkışlar"))
+hdp_chp_support2 = kwic(long_hdp$token, pattern = phrase("CHP sıralarından bravo"))
+hdp_mhp_support1 = kwic(long_hdp$token, pattern = phrase("MHP sıralarından alkışlar"))
+hdp_mhp_support2 = kwic(long_hdp$token, pattern = phrase("MHP sıralarından bravo"))
+hdp_akp_support1 = kwic(long_hdp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+hdp_akp_support2 = kwic(long_hdp$token, pattern = phrase("AK PARTİ sıralarından bravo"))
+
+hdp_akp_hostility1 = kwic(long_hdp$token, pattern = phrase("AK PARTİ sıralarından gel sesleri"))
+hdp_akp_hostility2 = kwic(long_hdp$token, pattern = phrase("AK PARTİ sıralarından gürültüler"))
+hdp_mhp_hostility1 = kwic(long_hdp$token, pattern = phrase("MHP sıralarından gürültüler"))
+hdp_mhp_hostility2 = kwic(long_hdp$token, pattern = phrase("MHP sıralarından"))
+hdp_hdp_hostility1 = kwic(long_hdp$token, pattern = phrase("HDP sıralarından gürültüler"))
+hdp_hdp_hostility2 = kwic(long_hdp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+hdp_chp_hostility1 = kwic(long_hdp$token, pattern = phrase("CHP sıralarından gürültüler"))
+hdp_chp_hostility2 = kwic(long_hdp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+akp_akp_support <- as.numeric(nrow(akp_akp_support1) + nrow(akp_akp_support2))
+akp_chp_support <- as.numeric(nrow(akp_chp_support1) + nrow(akp_chp_support2) + nrow(chp_akp_support1) + nrow(chp_akp_support2))
+akp_mhp_support <- as.numeric(nrow(akp_mhp_support1) + nrow(akp_mhp_support2) + nrow(mhp_akp_support1) + nrow(mhp_akp_support2))
+akp_hdp_support <- as.numeric(nrow(akp_hdp_support1) + nrow(akp_hdp_support2) + nrow(hdp_akp_support1) + nrow(hdp_akp_support2))
+chp_mhp_support <- as.numeric(nrow(chp_mhp_support1) + nrow(chp_mhp_support2) + nrow(mhp_chp_support1) + nrow(mhp_chp_support2))
+chp_hdp_support <- as.numeric(nrow(chp_hdp_support1) + nrow(chp_hdp_support2) + nrow(hdp_chp_support1) + nrow(hdp_chp_support2))
+chp_chp_support <- as.numeric(nrow(chp_chp_support1) + nrow(chp_chp_support2))
+hdp_hdp_support <- as.numeric(nrow(hdp_hdp_support1) + nrow(akp_hdp_support2))
+hdp_mhp_support <- as.numeric(nrow(hdp_mhp_support1) + nrow(hdp_mhp_support2) + nrow(mhp_hdp_support1) + nrow(mhp_hdp_support2))
+mhp_mhp_support <- as.numeric(nrow(mhp_mhp_support1) + nrow(mhp_mhp_support2))
+
+akp_akp_hostility <- as.numeric(nrow(akp_akp_hostility1) + nrow(akp_akp_hostility2))
+akp_chp_hostility <- as.numeric(nrow(akp_chp_hostility1) + nrow(akp_chp_hostility2) + nrow(chp_akp_hostility1) + nrow(chp_akp_hostility2))
+akp_mhp_hostility <- as.numeric(nrow(akp_mhp_hostility1) + nrow(akp_mhp_hostility2) + nrow(mhp_akp_hostility1) + nrow(mhp_akp_hostility2))
+akp_hdp_hostility <- as.numeric(nrow(akp_hdp_hostility1) + nrow(akp_hdp_hostility2) + nrow(hdp_akp_hostility1) + nrow(hdp_akp_hostility2))
+chp_mhp_hostility <- as.numeric(nrow(chp_mhp_hostility1) + nrow(chp_mhp_hostility2) + nrow(mhp_chp_hostility1) + nrow(mhp_chp_hostility2))
+chp_hdp_hostility <- as.numeric(nrow(chp_hdp_hostility1) + nrow(chp_hdp_hostility2) + nrow(hdp_chp_hostility1) + nrow(hdp_chp_hostility2))
+chp_chp_hostility <- as.numeric(nrow(chp_chp_hostility1) + nrow(chp_chp_hostility2))
+hdp_hdp_hostility <- as.numeric(nrow(hdp_hdp_hostility1) + nrow(akp_hdp_hostility2))
+hdp_mhp_hostility <- as.numeric(nrow(hdp_mhp_hostility1) + nrow(hdp_mhp_hostility2) + nrow(mhp_hdp_hostility1) + nrow(mhp_hdp_hostility2))
+mhp_mhp_hostility <- as.numeric(nrow(mhp_mhp_hostility1) + nrow(mhp_mhp_hostility2))
+
+
+df_support_hostility <- data.frame(row.names= c("AKP-AKP","AKP-CHP","AKP-MHP","AKP-HDP","CHP-MHP","CHP-HDP","CHP-CHP","HDP-HDP","HDP-MHP","MHP-MHP"),
+                                   Support = c(akp_akp_support,akp_chp_support,akp_mhp_support,akp_hdp_support,chp_mhp_support,chp_hdp_support,chp_chp_support,hdp_hdp_support,hdp_mhp_support,mhp_mhp_support),
+                                   Hostility = c(akp_akp_hostility,akp_chp_hostility,akp_mhp_hostility,akp_hdp_support,chp_mhp_hostility,chp_hdp_hostility,chp_chp_hostility,hdp_hdp_hostility,hdp_mhp_hostility,mhp_mhp_hostility))
+
+
+pca.support.hostility <- PCA(df_support_hostility, scale.unit = TRUE, ncp = 5, graph = TRUE)
+
+fviz_pca_biplot(pca.support.hostility, geom.var = c("point", "text"),repel= TRUE)
+
+fviz_pca_var(pca.support.hostility, col.var = "cos2",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             repel = TRUE)
+
+fviz_pca_biplot(pca.support.hostility, repel = TRUE,
+                col.var = "#2E9FDF", # Variables color
+                col.ind = "#696969"  # Individuals color
+)
+
+
+ind.p <- fviz_pca_biplot(pca.support.hostility, repel = TRUE)
+ind.p
+ggpubr::ggpar(ind.p,
+              title = "Dyadic Representation of Hostility and Support Scores between 2013 June-2015 June",
+              subtitle = "Principal Component Analysis",
+              xlab = "PC1(%58.1)", ylab = "PC2(41.9)",
+              ggtheme = theme_gray(), palette = "jco")
+
+
+
+################################################################################
+################################################################################
+#FOR THE SECOND PERIOD
+################################################################################
+################################################################################
+
+period_2 <- tbmm_corpus %>% filter(between(From, as.Date('2015-06-06'), as.Date('2016-10-06')))
+
+long_2__chp <- period_2 %>% filter(Speaker_party=="CHP")
+long_2__akp <- period_2 %>% filter(Speaker_party=="AKP AK Party")
+long_2__mhp <- period_2 %>% filter(Speaker_party=="MHP")
+long_2__hdp <- period_2 %>% filter(Speaker_party=="HDP")
+
+## SUPPORT and HOSTILITY scores for every party
+#CHP
+long_2__chp$token <- quanteda::tokens(long_2__chp$Speeches,remove_punct = FALSE, remove_numbers = FALSE, remove_symbols = FALSE,padding = TRUE)
+
+chp_chp_support1 = kwic(long_2__chp$token, pattern = phrase("CHP sıralarından alkışlar"))
+chp_chp_support2 = kwic(long_2__chp$token, pattern = phrase("CHP sıralarından bravo"))
+chp_akp_support1 = kwic(long_2__chp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+chp_akp_support2 = kwic(long_2__chp$token, pattern = phrase("AK PARTİ sıralarından bravo"))
+chp_hdp_support1 = kwic(long_2__chp$token, pattern = phrase("HDP sıralarından alkışlar"))
+chp_hdp_support2 = kwic(long_2__chp$token, pattern = phrase("HDP sıralarından bravo"))
+chp_mhp_support1 = kwic(long_2__chp$token, pattern = phrase("MHP sıralarından alkışlar"))
+chp_mhp_support2 = kwic(long_2__chp$token, pattern = phrase("MHP sıralarından bravo"))
+
+chp_chp_hostility1 = kwic(long_2__chp$token, pattern = phrase("CHP sıralarından gürültüler"))
+chp_chp_hostility2 = kwic(long_2__chp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+chp_akp_hostility1 = kwic(long_2__chp$token, pattern = phrase("AK PARTİ sıralarından gel sesleri"))
+chp_akp_hostility2 = kwic(long_2__chp$token, pattern = phrase("AK PARTİ sıralarından gürültüler"))
+
+
+chp_mhp_hostility1 = kwic(long_2__chp$token, pattern = phrase("MHP sıralarından gel sesleri"))
+chp_mhp_hostility2 = kwic(long_2__chp$token, pattern = phrase("MHP sıralarından gürültüler"))
+
+chp_hdp_hostility1 = kwic(long_2__chp$token, pattern = phrase("HDP sıralarından gürültüler"))
+chp_hdp_hostility2 = kwic(long_2__chp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+
+#AKP
+long_2__akp$token <- quanteda::tokens(long_2__akp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  tokens_remove(stopwords::stopwords("tr", source = "stopwords-iso")) %>%
+  tokens_remove(stop_words) %>%
+  tokens_tolower()
+
+akp_akp_support1 = kwic(long_2__akp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+akp_akp_support2 = kwic(long_2__akp$token, pattern = phrase("AK PARTİ sıralarından bravo sesleri"))
+
+akp_chp_support1 = kwic(long_2__akp$token, pattern = phrase("CHP sıralarından alkışlar"))
+akp_chp_support2 = kwic(long_2__akp$token, pattern = phrase("CHP sıralarından bravo"))
+
+akp_hdp_support1 = kwic(long_2__akp$token, pattern = phrase("HDP sıralarından alkışlar"))
+akp_hdp_support2 = kwic(long_2__akp$token, pattern = phrase("HDP sıralarından bravo"))
+
+akp_mhp_support1 = kwic(long_2__akp$token, pattern = phrase("MHP sıralarından alkışlar"))
+akp_mhp_support2 = kwic(long_2__akp$token, pattern = phrase("MHP sıralarından bravo"))
+
+akp_akp_hostility1 = kwic(long_2__akp$token, pattern = phrase("AK Parti sıralarından gel sesleri"))
+akp_akp_hostility2 = kwic(long_2__akp$token, pattern = phrase("Ak Parti sıralarından gürültüler"))
+akp_mhp_hostility1 = kwic(long_2__akp$token, pattern = phrase("MHP sıralarından gürültüler"))
+akp_mhp_hostility2 = kwic(long_2__akp$token, pattern = phrase("MHP sıralarından gel sesleri"))
+akp_hdp_hostility1 = kwic(long_2__akp$token, pattern = phrase("HDP sıralarından gürültüler"))
+akp_hdp_hostility2 = kwic(long_2__akp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+akp_chp_hostility1 = kwic(long_2__akp$token, pattern = phrase("CHP sıralarından gürültüler"))
+akp_chp_hostility2 = kwic(long_2__akp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+
+### MHP ###
+
+long_2__mhp$token <- quanteda::tokens(long_2__mhp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  tokens_remove(stopwords::stopwords("tr", source = "stopwords-iso")) %>%
+  tokens_remove(stop_words) %>%
+  tokens_tolower()
+mhp_mhp_support1 = kwic(long_2__mhp$token, pattern = phrase("MHP sıralarından alkışlar"))
+mhp_mhp_support2 = kwic(long_2__mhp$token, pattern = phrase("MHP sıralarından bravo"))
+mhp_chp_support1 = kwic(long_2__mhp$token, pattern = phrase("CHP sıralarından alkışlar"))
+mhp_chp_support2 = kwic(long_2__mhp$token, pattern = phrase("CHP sıralarından bravo"))
+mhp_hdp_support1 = kwic(long_2__mhp$token, pattern = phrase("HDP sıralarından alkışlar"))
+mhp_hdp_support2 = kwic(long_2__mhp$token, pattern = phrase("HDP sıralarından bravo"))
+mhp_akp_support1 = kwic(long_2__mhp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+mhp_akp_support2 = kwic(long_2__mhp$token, pattern = phrase("AK PARTİ sıralarından bravo"))
+
+mhp_mhp_hostility1 = kwic(long_2__mhp$token, pattern = phrase("MHP sıralarından gel sesleri"))
+mhp_mhp_hostility2 = kwic(long_2__mhp$token, pattern = phrase("MHP sıralarından gürültüler"))
+mhp_akp_hostility1 = kwic(long_2__mhp$token, pattern = phrase("AK PARTİ sıralarından gürültüler"))
+mhp_akp_hostility2 = kwic(long_2__mhp$token, pattern = phrase("AK PARTİ sıralarından gel sesleri"))
+mhp_hdp_hostility1 = kwic(long_2__mhp$token, pattern = phrase("HDP sıralarından gürültüler"))
+mhp_hdp_hostility2 = kwic(long_2__mhp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+mhp_chp_hostility1 = kwic(long_2__mhp$token, pattern = phrase("CHP sıralarından gürültüler"))
+mhp_chp_hostility2 = kwic(long_2__mhp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+
+### HDP ###
+
+long_2__hdp$token <- quanteda::tokens(long_2__hdp$Speeches,remove_punct = TRUE, remove_numbers = TRUE, remove_symbols = TRUE,padding = TRUE) %>%
+  tokens_remove(stopwords::stopwords("tr", source = "stopwords-iso")) %>%
+  tokens_remove(stop_words) %>%
+  tokens_tolower()
+
+hdp_hdp_support1 = kwic(long_2__hdp$token, pattern = phrase("HDP sıralarından alkışlar"))
+hdp_hdp_support2 = kwic(long_2__hdp$token, pattern = phrase("HDP sıralarından bravo"))
+hdp_chp_support1 = kwic(long_2__hdp$token, pattern = phrase("CHP sıralarından alkışlar"))
+hdp_chp_support2 = kwic(long_2__hdp$token, pattern = phrase("CHP sıralarından bravo"))
+hdp_mhp_support1 = kwic(long_2__hdp$token, pattern = phrase("MHP sıralarından alkışlar"))
+hdp_mhp_support2 = kwic(long_2__hdp$token, pattern = phrase("MHP sıralarından bravo"))
+hdp_akp_support1 = kwic(long_2__hdp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
+hdp_akp_support2 = kwic(long_2__hdp$token, pattern = phrase("AK PARTİ sıralarından bravo"))
+
+hdp_akp_hostility1 = kwic(long_2__hdp$token, pattern = phrase("AK PARTİ sıralarından gel sesleri"))
+hdp_akp_hostility2 = kwic(long_2__hdp$token, pattern = phrase("AK PARTİ sıralarından gürültüler"))
+hdp_mhp_hostility1 = kwic(long_2__hdp$token, pattern = phrase("MHP sıralarından gürültüler"))
+hdp_mhp_hostility2 = kwic(long_2__hdp$token, pattern = phrase("MHP sıralarından"))
+hdp_hdp_hostility1 = kwic(long_2__hdp$token, pattern = phrase("HDP sıralarından gürültüler"))
+hdp_hdp_hostility2 = kwic(long_2__hdp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+hdp_chp_hostility1 = kwic(long_2__hdp$token, pattern = phrase("CHP sıralarından gürültüler"))
+hdp_chp_hostility2 = kwic(long_2__hdp$token, pattern = phrase("CHP sıralarından gel sesleri"))
+
+akp_akp_support <- as.numeric(nrow(akp_akp_support1) + nrow(akp_akp_support2))
+akp_chp_support <- as.numeric(nrow(akp_chp_support1) + nrow(akp_chp_support2) + nrow(chp_akp_support1) + nrow(chp_akp_support2))
+akp_mhp_support <- as.numeric(nrow(akp_mhp_support1) + nrow(akp_mhp_support2) + nrow(mhp_akp_support1) + nrow(mhp_akp_support2))
+akp_hdp_support <- as.numeric(nrow(akp_hdp_support1) + nrow(akp_hdp_support2) + nrow(hdp_akp_support1) + nrow(hdp_akp_support2))
+chp_mhp_support <- as.numeric(nrow(chp_mhp_support1) + nrow(chp_mhp_support2) + nrow(mhp_chp_support1) + nrow(mhp_chp_support2))
+chp_hdp_support <- as.numeric(nrow(chp_hdp_support1) + nrow(chp_hdp_support2) + nrow(hdp_chp_support1) + nrow(hdp_chp_support2))
+chp_chp_support <- as.numeric(nrow(chp_chp_support1) + nrow(chp_chp_support2))
+hdp_hdp_support <- as.numeric(nrow(hdp_hdp_support1) + nrow(akp_hdp_support2))
+hdp_mhp_support <- as.numeric(nrow(hdp_mhp_support1) + nrow(hdp_mhp_support2) + nrow(mhp_hdp_support1) + nrow(mhp_hdp_support2))
+mhp_mhp_support <- as.numeric(nrow(mhp_mhp_support1) + nrow(mhp_mhp_support2))
+
+akp_akp_hostility <- as.numeric(nrow(akp_akp_hostility1) + nrow(akp_akp_hostility2))
+akp_chp_hostility <- as.numeric(nrow(akp_chp_hostility1) + nrow(akp_chp_hostility2) + nrow(chp_akp_hostility1) + nrow(chp_akp_hostility2))
+akp_mhp_hostility <- as.numeric(nrow(akp_mhp_hostility1) + nrow(akp_mhp_hostility2) + nrow(mhp_akp_hostility1) + nrow(mhp_akp_hostility2))
+akp_hdp_hostility <- as.numeric(nrow(akp_hdp_hostility1) + nrow(akp_hdp_hostility2) + nrow(hdp_akp_hostility1) + nrow(hdp_akp_hostility2))
+chp_mhp_hostility <- as.numeric(nrow(chp_mhp_hostility1) + nrow(chp_mhp_hostility2) + nrow(mhp_chp_hostility1) + nrow(mhp_chp_hostility2))
+chp_hdp_hostility <- as.numeric(nrow(chp_hdp_hostility1) + nrow(chp_hdp_hostility2) + nrow(hdp_chp_hostility1) + nrow(hdp_chp_hostility2))
+chp_chp_hostility <- as.numeric(nrow(chp_chp_hostility1) + nrow(chp_chp_hostility2))
+hdp_hdp_hostility <- as.numeric(nrow(hdp_hdp_hostility1) + nrow(akp_hdp_hostility2))
+hdp_mhp_hostility <- as.numeric(nrow(hdp_mhp_hostility1) + nrow(hdp_mhp_hostility2) + nrow(mhp_hdp_hostility1) + nrow(mhp_hdp_hostility2))
+mhp_mhp_hostility <- as.numeric(nrow(mhp_mhp_hostility1) + nrow(mhp_mhp_hostility2))
+
+
+df_support_hostility <- data.frame(row.names= c("AKP-AKP","AKP-CHP","AKP-MHP","AKP-HDP","CHP-MHP","CHP-HDP","CHP-CHP","HDP-HDP","HDP-MHP","MHP-MHP"),
+                                   Support = c(akp_akp_support,akp_chp_support,akp_mhp_support,akp_hdp_support,chp_mhp_support,chp_hdp_support,chp_chp_support,hdp_hdp_support,hdp_mhp_support,mhp_mhp_support),
+                                   Hostility = c(akp_akp_hostility,akp_chp_hostility,akp_mhp_hostility,akp_hdp_support,chp_mhp_hostility,chp_hdp_hostility,chp_chp_hostility,hdp_hdp_hostility,hdp_mhp_hostility,mhp_mhp_hostility))
+
+
+pca.support.hostility <- PCA(df_support_hostility, scale.unit = TRUE, ncp = 5, graph = TRUE)
+
+fviz_pca_biplot(pca.support.hostility, geom.var = c("point", "text"),repel= TRUE)
+
+fviz_pca_var(pca.support.hostility, col.var = "cos2",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             repel = TRUE)
+
+fviz_pca_biplot(pca.support.hostility, repel = TRUE,
+                col.var = "#2E9FDF", # Variables color
+                col.ind = "#696969"  # Individuals color
+)
+
+ind.p <- fviz_pca_biplot(pca.support.hostility, repel = TRUE)
+ind.p
+ggpubr::ggpar(ind.p,
+              title = "Dyadic Representation of Hostility and Support Scores between 2015 June-2016 October",
+              subtitle = "Principal Component Analysis",
+              xlab = "PC1(%61.1)", ylab = "PC2(38.9)",
+              ggtheme = theme_gray(), palette = "jco")
+
+
+###Close readings of texts
+tbmm_corpus1 <- tbmm_corpus
+tbmm_corpus$Speeches <- quanteda::tokens(tbmm_corpus$Speeches) 
+
+kwic_kobane <- kwic(tbmm_corpus$Speeches, pattern = phrase("kobane"), window = "40")
+kwic_pkk <- kwic(tbmm_corpus$Speeches, pattern = phrase("PKK"), window = "40")
+
+tbmm_corpus1$Speeches[[557092]]
+tbmm_corpus1$Speaker_name[[557092]]
+tbmm_corpus1$Speaker_party[[557092]]
+tbmm_corpus1$From[[557092]]
+
+tbmm_corpus1$Speeches[[103501]]
+tbmm_corpus1$Speaker_name[[103501]]
+tbmm_corpus1$Speaker_party[[103501]]
+tbmm_corpus1$From[[103501]]
+
+tbmm_corpus1$Speeches[[525846]]
+tbmm_corpus1$Speaker_name[[525846]]
+tbmm_corpus1$Speaker_party[[525846]]
+tbmm_corpus1$From[[525846]]
+
+
+
+  ##########################################################################
+#Get centroids of 4 different meanings of democracy
+##########################################################################
+
+marx_sc <- get_centroid(marx$words, my.wv)
+weber_sc <- get_centroid(weber$words, my.wv)
+durkheim_sc <- get_centroid(durkheim$words, my.wv)
+citizenship_sc <- get_centroid(citizenship$words, my.wv)
+cd <- rbind(marx_sc,weber_sc,durkheim_sc,citizenship_sc)
+##########################################################################
+
+it <- itoken(df_short$Speeches, tokenizer = word_tokenizer)
+v <- create_vocabulary(it)
+vectorizer <- vocab_vectorizer(v)
+my.dtm <- create_dtm(it, vectorizer)
+
+centroids.CMD <- CMDist(dtm=my.dtm, 
+                        cv = cd,
+                        wv = my.wv, 
+                        scale = TRUE)
+
+colnames(centroids.CMD) <- c("ID", "cmd.marx","cmd.weber",
+                             "cmd.durkheim", 
+                             "cmd.citizenship")
+
+#saveRDS(centroids.CMD, "/Users/osmandemirbag/Desktop/TBMM/centroids.CMD.Rds")
+#centroids.CMD <- readRDS("/Users/osmandemirbag/Desktop/TBMM/centroids.CMD.Rds")
+df.centroids          <- cbind(centroids.CMD, df_short, by = "ID")
+colnames(df.centroids)[10] <- c("date")
+df.centroids = subset(df.centroids, select = -c(1)) #drop first IDs
+df.centroids <- df.centroids[order(df.centroids$date),]
+df.centroids$date <- as.Date(df.centroids$date, "%Y-%m-%d")
+df.centroids$month.yr <- ceiling_date(as.Date(df.centroids$date), "month")
+
+monthly_summary <- function(df.centroids) summarise(df.centroids, date = format(max(date), "%Y-%m-%d"), 
+                                                    marx = sum(cmd.marx),
+                                                    weber = sum(cmd.weber),
+                                                    durkheim = sum(cmd.durkheim),
+                                                    citizenship = sum(cmd.citizenship))
+
+all.corpus <- slide_period_dfr(df.centroids, df.centroids$date, "month", monthly_summary)
+all.corpus$date <- as.Date(all.corpus$date,"%Y-%m-%d")
+
+figure2a <- ggplot(data = all.corpus,)+ 
+  geom_line(aes(x = date, y = marx, colour = "Battle for Democracy"))+
+  geom_line(aes(x = date, y = weber, colour = "Leadership Democracy"))+
+  geom_line(aes(x = date, y = durkheim, colour = "Social Solidarity in a Nation"))+
+  geom_line(aes(x = date, y = citizenship, colour = "Citizenship and Human Rights"))+
+  labs(x = "Time", y = "Mean Scores")+
+  ggtitle("Monthly Means of 4 Different Meanings of Democracy in All Corpus")+
+  scale_x_date(date_breaks = "3 month", date_labels = "%b - %Y", 
+               limits = c(as.Date("2013-06-06"), as.Date("2016-10-06")))
+
+
+short_chp <- df.centroids %>% filter(Speaker_party=="CHP")
+short_akp <- df.centroids %>% filter(Speaker_party=="AKP AK Party")
+short_mhp <- df.centroids %>% filter(Speaker_party=="MHP")
+short_hdp <- df.centroids %>% filter(Speaker_party=="HDP")
+
+chp.mean <-  slide_period_dfr(short_chp, short_chp$date, "month", monthly_summary)
+chp.mean$date <- as.Date(chp.mean$date,"%Y-%m-%d")
+
+figure2b <- ggplot(data = chp.mean,)+ 
+  geom_line(aes(x = date, y = marx, colour = "Battle for Democracy"))+
+  geom_line(aes(x = date, y = weber, colour = "Leadership Democracy"))+
+  geom_line(aes(x = date, y = durkheim, colour = "Social Solidarity in a Nation"))+
+  geom_line(aes(x = date, y = citizenship, colour = "Citizenship and Human Rights"))+
+  labs(x = "Time", y = "Mean Scores")+
+  ggtitle("Monthly Means of 4 Different Meanings of Democracy in CHP Subset")+
+  scale_x_date(date_breaks = "3 month", date_labels = "%b - %Y", 
+               limits = c(as.Date("2013-06-06"), as.Date("2016-10-06")))
+
+
+akp.mean <-  slide_period_dfr(short_akp, short_akp$date, "month", monthly_summary)
+akp.mean$date <- as.Date(akp.mean$date,"%Y-%m-%d")
+
+figure2c <- ggplot(data = akp.mean,)+ 
+  geom_line(aes(x = date, y = marx, colour = "Battle for Democracy"))+
+  geom_line(aes(x = date, y = weber, colour = "Leadership Democracy"))+
+  geom_line(aes(x = date, y = durkheim, colour = "Social Solidarity in a Nation"))+
+  geom_line(aes(x = date, y = citizenship, colour = "Citizenship and Human Rights"))+
+  labs(x = "Time", y = "Mean Scores")+
+  ggtitle("Monthly Means of 4 Different Meanings of Democracy in AKP Subset")+
+  scale_x_date(date_breaks = "3 month", date_labels = "%b - %Y", 
+               limits = c(as.Date("2013-06-06"), as.Date("2016-10-06")))
+
+
+mhp.mean <-  slide_period_dfr(short_mhp, short_mhp$date, "month", monthly_summary)
+mhp.mean$date <- as.Date(mhp.mean$date,"%Y-%m-%d")
+
+figure2d <- ggplot(data = mhp.mean,)+ 
+  geom_line(aes(x = date, y = marx, colour = "Battle for Democracy"))+
+  geom_line(aes(x = date, y = weber, colour = "Leadership Democracy"))+
+  geom_line(aes(x = date, y = durkheim, colour = "Social Solidarity in a Nation"))+
+  geom_line(aes(x = date, y = citizenship, colour = "Citizenship and Human Rights"))+
+  labs(x = "Time", y = "Mean Scores")+
+  ggtitle("Monthly Means of 4 Different Meanings of Democracy in MHP Subset")+
+  scale_x_date(date_breaks = "3 month", date_labels = "%b - %Y", 
+               limits = c(as.Date("2013-06-06"), as.Date("2016-10-06")))
+
+hdp.mean <-  slide_period_dfr(short_hdp, short_hdp$date, "month", monthly_summary)
+hdp.mean$date <- as.Date(hdp.mean$date,"%Y-%m-%d")
+
+figure2e <- ggplot(data = hdp.mean,)+ 
+  geom_line(aes(x = date, y = marx, colour = "Battle for Democracy"))+
+  geom_line(aes(x = date, y = weber, colour = "Leadership Democracy"))+
+  geom_line(aes(x = date, y = durkheim, colour = "Social Solidarity in a Nation"))+
+  geom_line(aes(x = date, y = citizenship, colour = "Citizenship and Human Rights"))+
+  labs(x = "Time", y = "Mean Scores")+
+  ggtitle("Monthly Means of 4 Different Meanings of Democracy in HDP Subset")+
+  scale_x_date(date_breaks = "3 month", date_labels = "%b - %Y", 
+               limits = c(as.Date("2013-06-06"), as.Date("2016-10-06")))
+
+figure2a
+figure2b
+figure2c
+figure2d
+figure2e
+
+
+
+
+
+
+

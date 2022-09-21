@@ -804,14 +804,20 @@ short_hdp <- tbmm_corpus %>% filter(Speaker_party=="HDP")
 
 ## SUPPORT and HOSTILITY scores for every party
 #CHP
-short_chp$token <- quanteda::tokens(short_chp$Speeches,remove_punct = FALSE, remove_numbers = FALSE, remove_symbols = FALSE,padding = TRUE)
+short_chp$token <- quanteda::tokens(short_chp$Speeches,remove_punct = FALSE, remove_numbers = FALSE, remove_symbols = FALSE,padding = TRUE)%>%
+                  tokens_remove(stopwords::stopwords("tr", source = "stopwords-iso")) %>%
+                  tokens_remove(stop_words) %>%
+                  tokens_tolower()
 
 chp_chp_support1 = kwic(short_chp$token, pattern = phrase("CHP sıralarından alkışlar"))
 chp_chp_support2 = kwic(short_chp$token, pattern = phrase("CHP sıralarından bravo"))
+
 chp_akp_support1 = kwic(short_chp$token, pattern = phrase("AK PARTİ sıralarından alkışlar"))
 chp_akp_support2 = kwic(short_chp$token, pattern = phrase("AK PARTİ sıralarından bravo"))
+
 chp_hdp_support1 = kwic(short_chp$token, pattern = phrase("HDP sıralarından alkışlar"))
 chp_hdp_support2 = kwic(short_chp$token, pattern = phrase("HDP sıralarından bravo"))
+
 chp_mhp_support1 = kwic(short_chp$token, pattern = phrase("MHP sıralarından alkışlar"))
 chp_mhp_support2 = kwic(short_chp$token, pattern = phrase("MHP sıralarından bravo"))
 
@@ -820,7 +826,6 @@ chp_chp_hostility2 = kwic(short_chp$token, pattern = phrase("CHP sıralarından 
 
 chp_akp_hostility1 = kwic(short_chp$token, pattern = phrase("AK PARTİ sıralarından gel sesleri"))
 chp_akp_hostility2 = kwic(short_chp$token, pattern = phrase("AK PARTİ sıralarından gürültüler"))
-
 
 chp_mhp_hostility1 = kwic(short_chp$token, pattern = phrase("MHP sıralarından gel sesleri"))
 chp_mhp_hostility2 = kwic(short_chp$token, pattern = phrase("MHP sıralarından gürültüler"))
@@ -848,10 +853,13 @@ akp_mhp_support2 = kwic(short_akp$token, pattern = phrase("MHP sıralarından br
 
 akp_akp_hostility1 = kwic(short_akp$token, pattern = phrase("AK Parti sıralarından gel sesleri"))
 akp_akp_hostility2 = kwic(short_akp$token, pattern = phrase("Ak Parti sıralarından gürültüler"))
+
 akp_mhp_hostility1 = kwic(short_akp$token, pattern = phrase("MHP sıralarından gürültüler"))
 akp_mhp_hostility2 = kwic(short_akp$token, pattern = phrase("MHP sıralarından gel sesleri"))
+
 akp_hdp_hostility1 = kwic(short_akp$token, pattern = phrase("HDP sıralarından gürültüler"))
 akp_hdp_hostility2 = kwic(short_akp$token, pattern = phrase("HDP sıralarından gel sesleri"))
+
 akp_chp_hostility1 = kwic(short_akp$token, pattern = phrase("CHP sıralarından gürültüler"))
 akp_chp_hostility2 = kwic(short_akp$token, pattern = phrase("CHP sıralarından gel sesleri"))
 

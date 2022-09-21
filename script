@@ -65,7 +65,7 @@ CMDdemokrasi$by       <- NULL
 CMDdemokrasi <- readRDS("/Users/osmandemirbag/Desktop/TBMM/CMDdemokrasi.Rds")
 
 ##########################################################################
-# 70 words from smaller dataset (CMD with ideal "demokrasi" scores)
+# 100 words from smaller dataset (CMD with ideal "demokrasi" scores)
 ##########################################################################
 
 # Prepare data for socio-semantic network analysis (lemmatization,stopwords,cooc)

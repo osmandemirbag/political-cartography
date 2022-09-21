@@ -1,5 +1,4 @@
 # Political Cartography of the Turkish Republic: A Quantitative Text Analysis
-
 This is the R script of my paper "Political Cartography of the Turkish Republic: A Quantitative Text Analysis" about the structure of political elites in Turkey between 2011 and 2021 with automated text analysis approaches.
 My coding is not good, but it would be expected to give the analysis in the paper.
 ## Data ##

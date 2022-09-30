@@ -1,5 +1,3 @@
-
-
 ##########################################################################
 #Get centroids of 4 different meanings of democracy
 ##########################################################################
@@ -10,7 +8,11 @@ durkheim_sc <- get_centroid(durkheim$words, my.wv)
 citizenship_sc <- get_centroid(citizenship$words, my.wv)
 cd <- rbind(marx_sc,weber_sc,durkheim_sc,citizenship_sc)
 ##########################################################################
+CMDdemokrasi <- readRDS("/Users/osmandemirbag/Desktop/TBMM/CMDdemokrasi.Rds")
 
+CMD_short <- CMDdemokrasi[CMDdemokrasi$cmd > 1, ]
+CMD_short <- CMD_short[!duplicated(CMD_short[,-2]),]
+df_short = subset(CMD_short, select = -c(1)) #drop first IDs
 it <- itoken(df_short$Speeches, tokenizer = word_tokenizer)
 v <- create_vocabulary(it)
 vectorizer <- vocab_vectorizer(v)
@@ -24,9 +26,8 @@ centroids.CMD <- CMDist(dtm=my.dtm,
 colnames(centroids.CMD) <- c("ID", "cmd.marx","cmd.weber",
                              "cmd.durkheim", 
                              "cmd.citizenship")
-
 #saveRDS(centroids.CMD, "/Users/osmandemirbag/Desktop/TBMM/centroids.CMD.Rds")
-#centroids.CMD <- readRDS("/Users/osmandemirbag/Desktop/TBMM/centroids.CMD.Rds")
+centroids.CMD <- readRDS("/Users/osmandemirbag/Desktop/TBMM/centroids.CMD.Rds")
 df.centroids          <- cbind(centroids.CMD, df_short, by = "ID")
 colnames(df.centroids)[10] <- c("date")
 df.centroids = subset(df.centroids, select = -c(1)) #drop first IDs
@@ -52,8 +53,6 @@ figure2a <- ggplot(data = all.corpus,)+
   ggtitle("Monthly Means of 4 Different Meanings of Democracy in All Corpus")+
   scale_x_date(date_breaks = "3 month", date_labels = "%b - %Y", 
                limits = c(as.Date("2013-06-06"), as.Date("2016-10-06")))
-
-
 short_chp <- df.centroids %>% filter(Speaker_party=="CHP")
 short_akp <- df.centroids %>% filter(Speaker_party=="AKP AK Party")
 short_mhp <- df.centroids %>% filter(Speaker_party=="MHP")
@@ -112,7 +111,6 @@ figure2e <- ggplot(data = hdp.mean,)+
   ggtitle("Monthly Means of 4 Different Meanings of Democracy in HDP Subset")+
   scale_x_date(date_breaks = "3 month", date_labels = "%b - %Y", 
                limits = c(as.Date("2013-06-06"), as.Date("2016-10-06")))
-
 figure2a
 figure2b
 figure2c
